@@ -2,6 +2,7 @@ import os
 from os import path
 from datetime import datetime
 import json
+import zipfile
 
 import charset_normalizer
 
@@ -62,29 +63,43 @@ def detect_encoding(file_path: str):
         return result['encoding']
 
 
-def serialize_file_data(
+def prepare_file_data(
     filename: str,
     file_text: str,
+    encoding: str,
     file_text_proccessed: str,
 ):
     data = {
         'Имя файла': filename,
         'Исходный текст': file_text,
         'Преобразованный текст': file_text_proccessed,
-        'Размер файла в байтах': len(file_text.encode('utf-8')),
+        'Размер файла в байтах': len(file_text.encode(encoding)),
         'Дата последнего изменения файла': datetime.fromtimestamp(
             path.getmtime(file_path),
         ).strftime('%Y-%m-%d %H:%M:%S'),
     }
-    with open(file_path, 'r', encoding='utf-8') as f:
-        data = f.read()
-        return json.dumps(data)
+    return data
 
 
-def load_to_json(output_path: str, data: dict):
-    file_path = path.join(output_path, 'proccessed_data.json')
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def load_to_json(output_path: str, json_filename: str, data: dict):
+    file_path = path.join(output_path, json_filename)
+
+    if not path.exists(file_path):
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(json.dumps([]))
+    with open(file_path, 'r+', encoding='utf-8') as f:
+        file_content = json.load(f)
+        if type(file_content) is not list:
+            f.truncate(0)
+            f.seek(0)
+            file_content = []
+            file_content.append(data)
+            f.write(json.dumps(file_content, ensure_ascii=False, indent=4))
+        else:
+            file_content.append(data)
+            f.seek(0)
+            f.truncate(0)
+            f.write(json.dumps(file_content, ensure_ascii=False, indent=4))
 
 
 if __name__ == '__main__':
@@ -124,22 +139,54 @@ if __name__ == '__main__':
 
     parse_path = path.abspath('project_root/data/raw')
     proccessed_path = path.abspath('project_root/data/processed')
+    output_json_path = path.abspath('project_root/output')
     for file in os.listdir(parse_path):
         file_path = path.join(parse_path, file)
-        encoding = detect_encoding(file_path)
+        encoding = detect_encoding(file_path) or 'utf-8'
         print(f'File: {file}, encoding: {encoding}')
+
+        if type(encoding) is not str:
+            continue
 
         with open(file_path, 'r', encoding=encoding) as f:
             data = f.read()
             filename, extention = file.rsplit('.', 1)
             new_filename = path.join(proccessed_path, f'{filename}_processed.{extention}')
-            with open(path.join(proccessed_path, new_filename), 'w', encoding=encoding) as f:
+            with open(path.join(proccessed_path, new_filename), 'w', encoding=encoding) as fp:
                 swapped_data = data.swapcase()
-                f.write(swapped_data)
+                fp.write(swapped_data)
 
-                serialize_file_data(
+                data_json = prepare_file_data(
                     filename=file,
+                    encoding=encoding,
                     file_text=data,
                     file_text_proccessed=swapped_data,
                 )
+                load_to_json(output_path=output_json_path, json_filename='proccessed_data.json', data=data_json)
                 print(f'File {file} processed')
+
+    '''
+    Задание 3: Работа с резервными копиями и восстановлением данны
+    '''
+
+    backup_path = path.abspath('project_root/backups')
+    data_path = path.abspath('project_root/data')
+
+    def create_backup(dir_path: str, backup_path: str):
+        backup_filename = f'backup_{datetime.now().strftime('%Y%m%d')}.zip'
+        backup_filepath = path.join(backup_path, backup_filename)
+        with zipfile.ZipFile(backup_filepath, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for root, dirs, files in os.walk(dir_path):
+                for file in files:
+                    file_path = path.join(root, file)
+                    zip_file.write(file_path, arcname=file_path.replace(dir_path, ''))
+
+        return backup_filepath
+
+    def restore_backup(backup_path: str, data_path: str):
+        with zipfile.ZipFile(backup_path, 'r') as zip_file:
+            zip_file.extractall(path.join(data_path, 'restored'))
+
+    backup = create_backup(dir_path=data_path, backup_path=backup_path)
+
+    restore_backup(backup_path=backup, data_path=data_path)
